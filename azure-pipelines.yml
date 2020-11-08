@@ -1,0 +1,110 @@
+# ASP.NET Core
+# Build and test ASP.NET Core projects targeting .NET Core.
+# Add steps that run tests, create a NuGet package, deploy, and more:
+# https://docs.microsoft.com/azure/devops/pipelines/languages/dotnet-core
+
+trigger:
+- master
+- feature/*
+
+name: $(Date:yyyy.MM.dd)$(Rev:.r)
+
+stages:
+- stage: "build"
+  jobs:
+  - job: "buildWebsite"
+    pool:
+      vmImage: 'ubuntu-latest'
+
+    variables:
+      buildConfiguration: 'Release'
+
+    steps:
+    # - script: dotnet build --configuration $(buildConfiguration) -o $(Build.ArtifactStagingDirectory) -p:Version=$(build.buildnumber)
+    #   displayName: 'dotnet build $(buildConfiguration)'
+
+    # - task: DotNetCoreCLI@2
+    #   inputs:
+    #     command: 'test'
+    #   displayName: "Run tests"
+
+    - task: DotNetCoreCLI@2
+      inputs:
+        command: 'publish'
+        publishWebProjects: true
+        arguments: '-o $(Build.ArtifactStagingDirectory) -p:Version=$(build.buildnumber)'
+      displayName: "Publish website"
+
+    - task: DockerInstaller@0
+      inputs:
+        dockerVersion: '17.09.0-ce'
+    - task: Docker@2
+      inputs:
+        containerRegistry: 'grpcregistry'
+        repository: 'grpcaspnetcore'
+        command: 'buildAndPush'
+        Dockerfile: '**/Dockerfile'
+        tags: |
+          $(Build.BuildNumber)
+          latest
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: 'drop'
+        publishLocation: 'Container'
+
+- stage: "deploy_to_dev"
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
+  jobs:
+  - deployment: 
+    environment: "dev"
+    variables:
+      websitename: 'grpc-$(Environment.Name)'
+
+    pool:
+      vmImage: 'ubuntu-latest'
+    strategy:
+      runOnce:    #rolling, canary are the other strategies that are supported
+        deploy:
+          steps:
+          - task: DownloadBuildArtifacts@0
+            inputs:
+              buildType: 'current'
+              downloadType: 'single'
+              artifactName: 'drop'
+              downloadPath: '$(System.ArtifactsDirectory)'
+          - task: AzureRmWebAppDeployment@4
+            inputs:
+              ConnectionType: 'AzureRM'
+              azureSubscription: 'Microsoft Azure Sponsorship(e081c30f-af88-4f88-af44-9cca457232cb)'
+              appType: 'webApp'
+              WebAppName: '$(websitename)'
+              packageForLinux: '$(System.ArtifactsDirectory)/**/*.zip'
+              RuntimeStack: 'DOTNETCORE|3.1'
+- stage: "deploy_to_test"
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
+  jobs:
+  - deployment: 
+    environment: "test"
+    variables:
+       websitename: 'grpc-$(Environment.Name)-anthony'
+    pool:
+      vmImage: 'ubuntu-latest'
+    strategy:
+      runOnce:    #rolling, canary are the other strategies that are supported
+        deploy:
+          steps:
+          - task: DownloadBuildArtifacts@0
+            inputs:
+              buildType: 'current'
+              downloadType: 'single'
+              artifactName: 'drop'
+              downloadPath: '$(System.ArtifactsDirectory)'
+          - task: AzureRmWebAppDeployment@4
+            inputs:
+              ConnectionType: 'AzureRM'
+              azureSubscription: 'Microsoft Azure Sponsorship(e081c30f-af88-4f88-af44-9cca457232cb)'
+              appType: 'webAppLinux'
+              WebAppName: '$(websitename)'
+              packageForLinux: '$(System.ArtifactsDirectory)/**/*.zip'
+              RuntimeStack: 'DOTNETCORE|3.1'    
